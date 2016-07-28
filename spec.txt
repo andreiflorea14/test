@@ -1,0 +1,207 @@
+import helpers.DefaultValues
+import helpers.TestHelpers._
+import models.forms.Placement
+import models.json.UserView
+import org.specs2.execute.AsResult
+import org.specs2.mutable.Around
+import play.api.libs.json._
+import play.api.test.FakeRequest
+
+trait PlacementAuditAppSpec extends PlacementAuditSpecification {
+
+  trait WithoutUser extends Around with WithPlacementAuditApplication {
+
+    def sendCreateUserRequest(
+      firstName: Option[String] = Some("John"),
+      lastName: Option[String] = Some("Doe"),
+      email: Option[String] = Some("john.doe@example.com"),
+      mainPassword: Option[String]  = Some(defaultPassword),
+      confirmationPassword: Option[String] = Some(defaultPassword)) = {
+
+      val parameters = Seq(
+        firstName.map(v => "firstName" -> JsString(v)),
+        lastName.map(v => "lastName" -> JsString(v)),
+        email.map(v => "email" -> JsString(v)),
+        mainPassword.map(v => "password.main" -> JsString(v)),
+        confirmationPassword.map(v => "password.confirmation" -> JsString(v))
+      )
+
+      val request = FakeRequest(POST, "/users/signup")
+        .withJsonBody(JsObject(parameters.flatten))
+
+      route(app, request).get
+    }
+
+    def sendLoginUserRequest(
+      email: Option[String] = Some("john.doe@example.com"),
+      password: Option[String]  = Some(defaultPassword)) = {
+
+      val parameters = Seq(
+        email.map(v => "email" -> JsString(v)),
+        password.map(v => "password" -> JsString(v))
+      )
+
+      val request = FakeRequest(POST, "/users/login")
+        .withJsonBody(JsObject(parameters.flatten))
+
+      route(app, request).get
+    }
+
+    def createDefaultUser = createUser("john.doe@example.com")
+
+    def createUser(email: String) = {
+      val response = sendCreateUserRequest(email = Some(email))
+      withInfoOnFailure(response) {
+        status(response) mustEqual OK
+        contentType(response) must beSome.which(_ == "application/json")
+      }
+      (contentAsJson(response) \ "token").get.toString()
+    }
+  }
+  
+  trait WithCreatedAdmin extends WithoutUser {
+    val adminUserEmail: String = "admin@example.com"
+    // first user created will be an admin
+    val adminUserToken: String = createUser(adminUserEmail)
+
+    override def around[T: AsResult](t: => T) = super.around {
+      t
+    }
+
+    override def sendLoginUserRequest(
+      email: Option[String] = Some(adminUserEmail),
+      password: Option[String]  = Some(defaultPassword)
+    ) = {
+      super.sendLoginUserRequest(email, password)
+    }
+
+    def loginAndGetTokenForUser(email: String = adminUserEmail, password: String = defaultPassword) = {
+      val response = sendLoginUserRequest(Some(email), Some(password))
+      (contentAsJson(response) \ "token").get.toString()
+    }
+
+    def getUsers(token: String = adminUserToken) = {
+      val request = FakeRequest(GET, "/users/list")
+        .withToken(token)
+
+      route(app, request).get
+    }
+
+    def getUsersList = {
+      val response = getUsers()
+      withInfoOnFailure(response) {
+        status(response) mustEqual OK
+      }
+      val json = contentAsJson(response)
+      json.asOpt[Seq[UserView]].get
+    }
+
+    def getUserByEmail(email: String): UserView = {
+      getUsersList.find(_.email == email).get
+    }
+
+    def getUserById(id: Int): UserView = {
+      getUsersList.find(_.id == id).get
+    }
+
+    def getUserId(email: String): Int = {
+      getUserByEmail(email).id
+    }
+  }
+
+  /**
+   * Creates an admin user and two normal users
+   */
+  trait WithThreeUsers extends WithPlacements {
+    val normalUser2 = "normalUser1@example.com"
+    val normalUser1 = "normalUser2@example.com"
+    val normalUser1Token = createUser(normalUser1)
+    val normalUser2Token = createUser(normalUser2)
+  }
+
+  trait WithPlacements extends WithCreatedAdmin {
+    lazy val defaultPlacementFull = DefaultValues.Placement.getFull
+    lazy val defaultPlacementPartial = DefaultValues.Placement.getPartial
+    lazy val defaultPlacementMinimal = DefaultValues.Placement.getMinimal
+
+    def sendCreatePlacementRequest(
+      token: Option[String],
+      placement: Option[JsValue] = None) = {
+
+      val emptyJson = Json.toJson("{}")
+      val request = FakeRequest(POST, "/placements")
+        .withJsonBody(placement.getOrElse(emptyJson))
+        .withHeaders(AUTHORIZATION -> ("Bearer " + token.getOrElse("")))
+
+      route(app, request).get
+    }
+
+    def sendCreatePlacementRequestReturningId(
+      token: String,
+      placement: Placement): Int = {
+      val response = sendCreatePlacementRequest(Some(token), Some(Json.toJson(placement)))
+      // TODO:CBP LTHTR-10 Fix response parsing if wrong
+      contentAsJson(response).asOpt[Placement].get.placement.id.get
+    }
+
+    def assertExpectedPlacement(actual: Placement, expected: Placement) = {
+      actual.placement.vpcNumber mustEqual expected.placement.vpcNumber
+      actual.placement.placementName mustEqual expected.placement.placementName
+      actual.actionPlanReviews mustEqual expected.actionPlanReviews
+      actual.actionPlans mustEqual expected.actionPlans
+      actual.areasOfBestPractice mustEqual expected.areasOfBestPractice
+      actual.auditTeam mustEqual expected.auditTeam
+      actual.availableLearningExperiences mustEqual expected.availableLearningExperiences
+      actual.collectionOfEvidence mustEqual expected.collectionOfEvidence
+      actual.essentialCriteria mustEqual expected.essentialCriteria
+      actual.practiceTeachingLearningAssessmentCriteria mustEqual expected.practiceTeachingLearningAssessmentCriteria
+      actual.qualityMonitoringCriteria mustEqual expected.qualityMonitoringCriteria
+      actual.generalInfo mustEqual expected.generalInfo
+      actual.learnerCapacityBreakdowns mustEqual expected.learnerCapacityBreakdowns
+      actual.meptProfiles mustEqual expected.meptProfiles
+      actual.pleProfile mustEqual expected.pleProfile
+      actual.signatures mustEqual expected.signatures
+      actual.spokePlacements mustEqual expected.spokePlacements
+    }
+
+    def sharePlacement(token: String, placementId: Int, userId: Int) = {
+      val request = FakeRequest(POST, s"/placements/$placementId/share")
+        .withJsonBody(JsObject(Seq("userId" -> JsString(userId.toString))))
+        .withToken(token)
+
+      route(app, request).get
+    }
+
+    def revokePlacementRight(token: String, placementId: Int, userId: Int) = {
+      val request = FakeRequest(POST, s"/placements/$placementId/revoke")
+        .withJsonBody(JsObject(Seq("userId" -> JsString(userId.toString))))
+        .withToken(token)
+
+      route(app, request).get
+    }
+
+    def sharePlacementWithUser(token: String, placementId: Int, userEmail: String, expectedStatus: Int = OK) = {
+      val userId = getUserId(userEmail)
+      val response = sharePlacement(token, placementId, userId)
+      withInfoOnFailure(response) {
+        status(response) mustEqual expectedStatus
+      }
+    }
+
+    def revokePlacementRightForUser(token: String, placementId: Int, userEmail: String, expectedStatus: Int = OK) = {
+      val userId = getUserId(userEmail)
+      val response = revokePlacementRight(token, placementId, userId)
+      withInfoOnFailure(response) {
+        status(response) mustEqual expectedStatus
+      }
+    }
+
+    def getListOfPlacements(token: String): Seq[Placement] = {
+      val request = FakeRequest(GET, s"/placements")
+        .withToken(token)
+
+      val response = route(app, request).get
+      contentAsJson(response).asOpt[Seq[Placement]].get
+    }
+  }
+}
