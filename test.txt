@@ -1,0 +1,391 @@
+import helpers.TestHelpers._
+import org.junit.runner._
+import org.specs2.runner._
+import play.api.libs.json.{JsArray, JsObject, JsString}
+import play.api.test._
+
+@RunWith(classOf[JUnitRunner])
+class UserManagementSpec extends PlacementAuditAppSpec {
+
+  trait WithAdminRights extends WithCreatedAdmin {
+    lazy val adminId = getUserId(adminUserEmail)
+
+    def sendAdminRightsRequest(
+      enabled: Option[Boolean],
+      id: Int,
+      token: String = ""
+    ) = {
+      val parameters = Seq(enabled.map(e => "enabled" -> JsString(e.toString)))
+      val request = FakeRequest(POST, s"/users/$id/admin-right")
+        .withJsonBody(JsObject(parameters.flatten))
+        .withToken(token)
+      route(app, request).get
+    }
+
+
+    def changeRights(userId: Int, enabled: Boolean, token: String) = {
+      val response = sendAdminRightsRequest(Some(enabled), userId, token)
+
+      withInfoOnFailure(response) {
+        status(response) mustEqual OK
+      }
+    }
+
+    def changeRightsAndReturnUser(userId: Int, enabled: Boolean, token: String = adminUserToken) = {
+      changeRights(userId, enabled, token)
+      getUserById(userId)
+    }
+  }
+
+  "User Management" should {
+    "fail if no parameters passed when creating an user" in new WithoutUser {
+      val response = sendCreateUserRequest(None, None, None, None, None)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          requiredFieldsErrors("firstName", "lastName", "email", "password.main", "password.confirmation")
+      }
+    }
+
+    "fail if no first name is passed when creating an user" in new WithoutUser {
+      val response = sendCreateUserRequest(firstName = None)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          requiredFieldsErrors("firstName")
+      }
+    }
+
+    "fail if no last name is passed when creating an user" in new WithoutUser {
+      val response = sendCreateUserRequest(lastName = None)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          requiredFieldsErrors("lastName")
+      }
+    }
+
+    "fail if no email is passed when creating an user" in new WithoutUser {
+      val response = sendCreateUserRequest(email = None)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          requiredFieldsErrors("email")
+      }
+    }
+
+    "fail if when creating an user if email has wrong format" in new WithoutUser {
+      val response = sendCreateUserRequest(email = Some("john.doe"))
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          JsObject(Seq("email" -> JsArray(Seq(JsString("Valid email required")))))
+      }
+    }
+
+    "fail if no password is passed when creating an user" in new WithoutUser {
+      val response = sendCreateUserRequest(mainPassword = None)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          requiredFieldsErrors("password.main")
+      }
+    }
+
+    "fail if no confirmation password is passed when creating an user" in new WithoutUser {
+      val response = sendCreateUserRequest(confirmationPassword = None)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          requiredFieldsErrors("password.confirmation")
+      }
+    }
+
+    "fail when creating an user if passwords do not match" in new WithoutUser {
+      val response = sendCreateUserRequest(confirmationPassword = Some("different"))
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          JsObject(Seq("password" -> JsArray(Seq(JsString("Passwords do not match.")))))
+      }
+    }
+
+    "fail when creating an user if password too short" in new WithoutUser {
+      val response = sendCreateUserRequest(mainPassword = Some("pass"), confirmationPassword = Some("pass"))
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          JsObject(Seq("password" -> JsArray(Seq(JsString("Password is too short.")))))
+      }
+    }
+
+    "succeed signing up an user if all details are correct" in new WithoutUser {
+      createDefaultUser
+    }
+
+    "fail when trying to create user with existing email address" in new WithCreatedAdmin {
+      val response = sendCreateUserRequest(email = Some(adminUserEmail))
+
+      withInfoOnFailure(response) {
+        status(response) mustEqual BAD_REQUEST
+        contentAsJson(response) mustEqual
+          JsObject(Seq("email" -> JsArray(Seq(JsString("This email is already registered")))))
+      }
+    }
+
+    "fail if email not passed when logging in" in new WithCreatedAdmin {
+      val response = sendLoginUserRequest(email = None)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          requiredFieldsErrors("email")
+      }
+    }
+
+    "fail if password not found when logging in" in new WithCreatedAdmin {
+      val response = sendLoginUserRequest(password = None)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          requiredFieldsErrors("password")
+      }
+    }
+
+    "fail if email not found" in new WithCreatedAdmin {
+      val response = sendLoginUserRequest(email = Some("unknown@test.com"))
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          JsObject(Seq("" -> JsArray(Seq(JsString("Invalid email or password")))))
+      }
+    }
+
+    "fail if password does not match" in new WithCreatedAdmin {
+      val response = sendLoginUserRequest(password = Some("invalid"))
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          JsObject(Seq("" -> JsArray(Seq(JsString("Invalid email or password")))))
+      }
+    }
+
+    "receive authentication token if login successful" in new WithCreatedAdmin {
+      val response = sendLoginUserRequest()
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(OK)
+        contentType(response) must beSome.which(_ == "application/json")
+        (contentAsJson(response) \ "token").toOption must beSome
+      }
+    }
+
+    "not allow a user to access secure resource with no token" in new WithCreatedAdmin {
+      val response = route(app, FakeRequest(GET, "/index")).get
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(UNAUTHORIZED)
+      }
+    }
+
+    "not allow a user to access secure resource with extra character at start of token" in new WithCreatedAdmin {
+      val response = route(app, FakeRequest(GET, "/index").withHeaders(AUTHORIZATION -> ("Bearer 1" + adminUserToken))).get
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(UNAUTHORIZED)
+      }
+    }
+
+    "not allow a user to access secure resource with extra character at end of token" in new WithCreatedAdmin {
+      val response = route(app, FakeRequest(GET, "/index").withToken(adminUserToken + "t")).get
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(UNAUTHORIZED)
+      }
+    }
+
+    "not allow a user to access secure resource with expired token" in new WithCreatedAdmin {
+      val loginResponse = sendLoginUserRequest()
+      val token = (contentAsJson(loginResponse) \ "token").get.toString()
+      Thread.sleep(20000)
+      val response = route(app, FakeRequest(GET, "/index").withHeaders(AUTHORIZATION -> ("Bearer " + token ))).get
+      withInfoOnFailure(response) {
+        status(response) must equalTo(UNAUTHORIZED)
+      }
+    }
+
+    "allow a user to access secure resource with correct token" in new WithCreatedAdmin {
+      val response = route(app, FakeRequest(GET, "/index").withToken(adminUserToken)).get
+      withInfoOnFailure(response) {
+        status(response) must equalTo(OK)
+      }
+    }
+
+    "fail if no 'enabled' argument is passed when making a request" in new WithAdminRights {
+      val response = sendAdminRightsRequest(enabled = None, id = adminId, token = adminUserToken)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(BAD_REQUEST)
+        contentType(response) must beSome.which(_ == "application/json")
+        contentAsJson(response) mustEqual
+          JsObject(Seq("enabled" -> JsArray(Seq(JsString("'Enabled' field is required")))))
+      }
+    }
+
+    "fail if the id provided does not exist in the database" in new WithAdminRights {
+      val response = sendAdminRightsRequest(enabled = Some(true),id = -1, token = adminUserToken)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(NOT_FOUND)
+      }
+    }
+
+    "fail if the token is not provided" in new WithAdminRights {
+      val response = sendAdminRightsRequest(enabled = Some(true), id = adminId)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(UNAUTHORIZED)
+      }
+    }
+
+    "fail if the token is provided,but not valid" in new WithAdminRights {
+      val response = sendAdminRightsRequest(enabled = None, id = adminId, token = "wrong")
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(UNAUTHORIZED)
+      }
+    }
+
+    "succeed if the token and 'enabled' field are correct and the id exists in the database" in new WithAdminRights {
+      val response = sendAdminRightsRequest(enabled = Some(true), id = adminId, token = adminUserToken)
+
+      withInfoOnFailure(response) {
+        status(response) must equalTo(OK)
+      }
+    }
+
+    "succeed and change rights of a normal user to admin" in new WithAdminRights {
+      val newUserEmail = "newUser@example.com"
+      createUser(newUserEmail)
+
+      val createdUser = getUsersList.find(_.email == newUserEmail).get
+      createdUser.isAdmin must beFalse
+      val userAfterChanges = changeRightsAndReturnUser(createdUser.id, enabled = true)
+
+      userAfterChanges.isAdmin must beTrue
+    }
+
+    "succeed and change rights of an admin to normal user,if there are at least 2 admins" in new WithAdminRights {
+      val newUserEmail = "newUser@example.com"
+      createUser(newUserEmail)
+      val newUserId = getUserId(newUserEmail)
+      changeRights(newUserId, enabled = true, adminUserToken)
+
+      val updatedUser = changeRightsAndReturnUser(newUserId, enabled = false)
+
+      updatedUser.isAdmin must beFalse
+    }
+
+    "fail when the only admin tries to make himself normal user" in new WithAdminRights {
+      val adminResponse = sendAdminRightsRequest(enabled = Some(false), id = adminId, token = adminUserToken)
+      withInfoOnFailure(adminResponse) {
+        status(adminResponse) mustEqual FORBIDDEN
+        contentAsJson(adminResponse) mustEqual JsObject(Seq("error" -> JsString("Cannot remove the only administrator!")))
+      }
+    }
+
+    "succeed and do not change anything if the changes are redundant" in new WithAdminRights {
+      val newUserEmail = "newUser@example.com"
+      createUser(newUserEmail)
+      val newUserId = getUserId(newUserEmail)
+      val userAfterChanges = changeRightsAndReturnUser(newUserId, enabled = false)
+      userAfterChanges.isAdmin mustEqual false
+    }
+
+    "not allow a user to get list of users with no token" in new WithCreatedAdmin {
+      val response = getUsers(token = "")
+      withInfoOnFailure(response) {
+        status(response) must equalTo(UNAUTHORIZED)
+      }
+    }
+
+    "allow admin to get list of users if it is logged in" in new WithCreatedAdmin {
+      val response = getUsers()
+      withInfoOnFailure(response) {
+        status(response) must equalTo(OK)
+      }
+    }
+
+    "not allow a user to get list of users if it is not admin" in new WithCreatedAdmin {
+      val newUserEmail = "newUser@example.com"
+      val newUserToken = createUser(newUserEmail)
+      val response = getUsers(newUserToken)
+
+      withInfoOnFailure(response) {
+        status(response) mustEqual FORBIDDEN
+      }
+    }
+
+
+    "fail when the ID to be deleted is not provided" in new WithCreatedAdmin {
+      val response = sendDeleteUserRequest(None)
+      withInfoOnFailure(response) {
+        status(response) mustEqual BAD_REQUEST
+      }
+    }
+
+    "fail when the ID to be deleted doesn't exist in the database" in new WithCreatedAdmin {
+      val response = sendDeleteUserRequest(Some(getUserId(adminUserEmail)+1))
+      withInfoOnFailure(response) {
+        status(response) mustEqual NOT_FOUND
+      }
+    }
+
+    "not allow a user to delete other users if it is not admin" in new WithCreatedAdmin {
+      val newUserEmail = "newUser@example.com"
+      val newUserToken = createUser(newUserEmail)
+      val response = sendDeleteUserRequest(Some(getUserId(adminUserEmail)), newUserToken)
+      withInfoOnFailure(response) {
+        status(response) mustEqual FORBIDDEN
+      }
+    }
+
+    "succeed if the ID to be deleted exists and the user is allowed to delete other users" in new WithCreatedAdmin {
+      val newUserEmail = "newUser@example.com"
+      createUser(newUserEmail)
+      val newUserID = getUserId(newUserEmail)
+      val response = sendDeleteUserRequest(Some(newUserID))
+      withInfoOnFailure(response) {
+        status(response) mustEqual OK
+      }
+      adminUserToken mustEqual "token"
+    }
+
+  }
+}
+
